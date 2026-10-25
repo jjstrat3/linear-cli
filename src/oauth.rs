@@ -18,9 +18,6 @@ use crate::http;
 
 /// The "LinCLI" OAuth application. Client IDs are public by design.
 pub const CLIENT_ID: &str = "46bcf230063ae8578c372635cbb0eb22";
-/// Loopback callback ports, tried in order. Each must be registered as
-/// `http://127.0.0.1:<port>/callback` on the OAuth app.
-pub const REDIRECT_PORTS: &[u16] = &[47823, 47824, 47825];
 pub const DEFAULT_SCOPES: &[&str] = &["read", "issues:create", "comments:create"];
 
 const AUTHORIZE_URL: &str = "https://linear.app/oauth/authorize";
@@ -50,19 +47,17 @@ pub fn redirect_uri(port: u16) -> String {
     format!("http://127.0.0.1:{port}/callback")
 }
 
-/// Bind the first free callback port.
+/// Bind a loopback port chosen by the OS. A fixed port isn't reliable: WSL's
+/// mirrored networking reserves a 4096-port block on the Windows host that
+/// moves on every boot (RFC 8252 section 7.3 has servers accept any port).
 fn bind_callback() -> Result<(TcpListener, u16)> {
-    let mut errors = Vec::new();
-    for &port in REDIRECT_PORTS {
-        match TcpListener::bind(("127.0.0.1", port)) {
-            Ok(l) => return Ok((l, port)),
-            Err(e) => errors.push(format!("{port}: {e}")),
-        }
-    }
-    Err(Error::OAuth(format!(
-        "no free port for the login callback ({}); close whatever is using them, or use `lin auth login --with-token`",
-        errors.join("; ")
-    )))
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|e| Error::OAuth(format!("can't listen for the login callback: {e}")))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| Error::OAuth(e.to_string()))?
+        .port();
+    Ok((listener, port))
 }
 
 pub fn authorize_url(scopes: &[String], state: &str, challenge: &str, redirect_uri: &str) -> Url {
@@ -330,12 +325,10 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_when_first_port_is_busy() {
-        let Ok(_hold) = TcpListener::bind(("127.0.0.1", REDIRECT_PORTS[0])) else {
-            return; // port already taken on this machine; nothing to prove
-        };
-        let (_l, port) = bind_callback().unwrap();
-        assert_ne!(port, REDIRECT_PORTS[0]);
+    fn callback_port_is_os_assigned() {
+        let (l, port) = bind_callback().unwrap();
+        assert_ne!(port, 0);
+        assert_eq!(l.local_addr().unwrap().port(), port);
     }
 
     #[test]

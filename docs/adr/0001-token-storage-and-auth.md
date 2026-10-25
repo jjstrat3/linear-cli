@@ -42,11 +42,11 @@ From Linear's [OAuth 2.0 docs](https://linear.app/developers/oauth-2-0-authentic
 - **Scopes:** `read`, `write`, `issues:create` (also covers attachments), `comments:create`, `admin`.
   - `issues update` and probably `files upload` need full `write`. Linear has no narrower update scope.
   - Proposal: `auth login` defaults to `read,issues:create,comments:create`, and `--scope write` is an opt-in.
-- **Redirect:** the docs don't say whether loopback redirects with any port are allowed. Plan for a fixed port (for example `http://127.0.0.1:47823/callback`) registered on the OAuth app, and confirm this when the app is created.
+- **Redirect:** the docs don't say whether loopback redirects with any port are allowed. Fixed ports failed in practice on Windows with WSL mirrored networking (see Resolved), so `lin` uses an OS-assigned port and relies on Linear accepting any loopback port, as RFC 8252 §7.3 recommends.
 - **Headers:** personal API keys go in `Authorization: <key>`, while OAuth tokens use `Authorization: Bearer <token>`. The env var path should accept either, telling them apart by the `lin_api_` prefix.
 
 ## Resolved
 
 - Repo: `jjstrat3/linear-cli`.
-- OAuth app "LinCLI" (Linear disallows "Linear" in app names). Client ID `46bcf230063ae8578c372635cbb0eb22`, callbacks `http://127.0.0.1:{47823,47824,47825}/callback`. `lin` tries the ports in order, because a fixed port can already be taken (seen on Windows: os error 10048).
+- OAuth app "LinCLI" (Linear disallows "Linear" in app names). Client ID `46bcf230063ae8578c372635cbb0eb22`, callback `http://127.0.0.1:<any port>/callback`. The port is OS-assigned: on Windows with WSL `networkingMode=mirrored`, WSL reserves a 4096-port block on the host (for example 44620–48715) that moves on each boot, so any fixed port can fail with os error 10048.
 - Binary name: `lin`.
