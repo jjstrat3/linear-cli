@@ -42,11 +42,11 @@ From Linear's [OAuth 2.0 docs](https://linear.app/developers/oauth-2-0-authentic
 - **Scopes:** `read`, `write`, `issues:create` (also covers attachments), `comments:create`, `admin`.
   - `issues update` and probably `files upload` need full `write`. Linear has no narrower update scope.
   - Proposal: `auth login` defaults to `read,issues:create,comments:create`, and `--scope write` is an opt-in.
-- **Redirect:** the docs don't say whether loopback redirects with any port are allowed. Fixed ports failed in practice on Windows with WSL mirrored networking (see Resolved), so `lin` uses an OS-assigned port and relies on Linear accepting any loopback port, as RFC 8252 §7.3 recommends.
+- **Redirect:** the docs don't say whether loopback redirects with any port are allowed. Tested 2026-10-25: Linear rejects unregistered ports ("Invalid redirect_uri parameter"), even with a portless loopback URI registered, so ports must be fixed and registered.
 - **Headers:** personal API keys go in `Authorization: <key>`, while OAuth tokens use `Authorization: Bearer <token>`. The env var path should accept either, telling them apart by the `lin_api_` prefix.
 
 ## Resolved
 
 - Repo: `jjstrat3/linear-cli`.
-- OAuth app "LinCLI" (Linear disallows "Linear" in app names). Client ID `46bcf230063ae8578c372635cbb0eb22`, callback `http://127.0.0.1:<any port>/callback`. The port is OS-assigned: on Windows with WSL `networkingMode=mirrored`, WSL reserves a 4096-port block on the host (for example 44620–48715) that moves on each boot, so any fixed port can fail with os error 10048.
+- OAuth app "LinCLI" (Linear disallows "Linear" in app names). Client ID `46bcf230063ae8578c372635cbb0eb22`, callbacks `http://127.0.0.1:{7823,4823,9823}/callback`, tried in that order. On Windows with WSL `networkingMode=mirrored`, WSL reserves a 4096-port block on the host (44620–48715 on Jay's machine) that moves on each boot and fails binds with os error 10048. The ports are below 10000 and spread at least 4096 apart, so one block can never cover all three.
 - Binary name: `lin`.

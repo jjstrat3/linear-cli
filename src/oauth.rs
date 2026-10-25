@@ -47,17 +47,27 @@ pub fn redirect_uri(port: u16) -> String {
     format!("http://127.0.0.1:{port}/callback")
 }
 
-/// Bind a loopback port chosen by the OS. A fixed port isn't reliable: WSL's
-/// mirrored networking reserves a 4096-port block on the Windows host that
-/// moves on every boot (RFC 8252 section 7.3 has servers accept any port).
+/// Loopback callback ports, tried in order. Linear matches redirect URIs
+/// exactly, so each must be registered on the OAuth app as
+/// `http://127.0.0.1:<port>/callback`. They sit below 10000 and are spread
+/// out because WSL's mirrored networking reserves a 4096-port block on the
+/// Windows host (e.g. 44620-48715) that moves on every boot: at most two of
+/// these can ever fall inside one block.
+pub const REDIRECT_PORTS: &[u16] = &[7823, 4823, 9823];
+
+/// Bind the first free callback port.
 fn bind_callback() -> Result<(TcpListener, u16)> {
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|e| Error::OAuth(format!("can't listen for the login callback: {e}")))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| Error::OAuth(e.to_string()))?
-        .port();
-    Ok((listener, port))
+    let mut errors = Vec::new();
+    for &port in REDIRECT_PORTS {
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => return Ok((l, port)),
+            Err(e) => errors.push(format!("{port}: {e}")),
+        }
+    }
+    Err(Error::OAuth(format!(
+        "no free port for the login callback ({}); close whatever is using them, or use `lin auth login --with-token`",
+        errors.join("; ")
+    )))
 }
 
 pub fn authorize_url(scopes: &[String], state: &str, challenge: &str, redirect_uri: &str) -> Url {
@@ -315,20 +325,32 @@ mod tests {
             &["read".into(), "write".into()],
             "st",
             "ch",
-            &redirect_uri(47824),
+            &redirect_uri(4823),
         );
         let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(q["client_id"], CLIENT_ID);
         assert_eq!(q["scope"], "read,write");
         assert_eq!(q["code_challenge_method"], "S256");
-        assert_eq!(q["redirect_uri"], "http://127.0.0.1:47824/callback");
+        assert_eq!(q["redirect_uri"], "http://127.0.0.1:4823/callback");
     }
 
     #[test]
-    fn callback_port_is_os_assigned() {
-        let (l, port) = bind_callback().unwrap();
-        assert_ne!(port, 0);
-        assert_eq!(l.local_addr().unwrap().port(), port);
+    fn falls_back_when_first_port_is_busy() {
+        // Hold the first port ourselves; if something else already has it,
+        // the fallback path is exercised anyway.
+        let _hold = TcpListener::bind(("127.0.0.1", REDIRECT_PORTS[0]));
+        let (_l, port) = bind_callback().unwrap();
+        assert_ne!(port, REDIRECT_PORTS[0]);
+    }
+
+    #[test]
+    fn ports_cannot_share_one_wsl_block() {
+        let (min, max) = (
+            *REDIRECT_PORTS.iter().min().unwrap(),
+            *REDIRECT_PORTS.iter().max().unwrap(),
+        );
+        assert!(max - min >= 4096);
+        assert!(max < 10000);
     }
 
     #[test]

@@ -29,7 +29,7 @@ lin auth logout                       # revoke the OAuth grant and remove it
 
 - **Token order:** `LINEAR_API_TOKEN` first, then the keychain. The variable can hold either a personal API key (`lin_api_…`) or an OAuth access token.
 - **Scopes:** by default OAuth asks for `read,issues:create,comments:create`. Updating issues needs Linear's broader `write` scope.
-- **Callback port:** OAuth login listens on `127.0.0.1` on a port the OS picks, because fixed ports can collide with WSL mirrored networking on Windows.
+- **Callback ports:** OAuth login listens on `127.0.0.1` on the first free port of 7823, 4823 and 9823. Linear requires exact redirect URIs, and the ports are spread out so WSL mirrored networking on Windows (which reserves a moving 4096-port block) can never cover all three.
 - **Refresh:** OAuth access tokens last 24 hours. `lin` refreshes them automatically, under a lock, so parallel agents don't clash.
 
 ## Exit codes
