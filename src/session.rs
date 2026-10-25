@@ -43,7 +43,9 @@ fn lock_path() -> PathBuf {
         .join("refresh.lock")
 }
 
-fn lock_file() -> Result<File> {
+/// Held around every keychain write (login, refresh, logout) so a refresh in
+/// another process can't overwrite a newer login, or resurrect a logged-out one.
+pub fn lock_file() -> Result<File> {
     let path = lock_path();
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| Error::Keychain(format!("lock dir: {e}")))?;

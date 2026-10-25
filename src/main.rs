@@ -56,7 +56,20 @@ enum AuthCommand {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) if !e.use_stderr() => e.exit(), // --help, --version
+        Err(e) => {
+            // Agents rely on JSON errors, even for bad arguments.
+            let human = std::env::args().any(|a| a == "--human");
+            let format = if human { Format::Human } else { Format::Json };
+            let msg = e.render().to_string();
+            let msg = msg.trim().trim_start_matches("error: ");
+            let err = Error::Usage(msg.to_string());
+            output::print_error(format, &err);
+            std::process::exit(err.exit_code());
+        }
+    };
     let format = if cli.human {
         Format::Human
     } else {
@@ -133,6 +146,7 @@ fn login(with_token: bool, mut scopes: Vec<String>, open_browser: bool) -> Resul
         }
     };
     let me = api::Client::new(&cred).viewer()?;
+    let _lock = session::lock_file()?;
     store::save(&cred)?;
 
     let mut v = json!({
@@ -193,6 +207,7 @@ fn status() -> (Value, i32) {
 }
 
 fn logout() -> Result<Value> {
+    let _lock = session::lock_file()?;
     let stored = store::load()?;
     let mut v = json!({ "status": "logged_out", "removed": false });
     if let Some(cred) = stored {
