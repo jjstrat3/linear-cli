@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+      # Real OS keychain round-trip (uses a separate "lin-test" entry).
+      - name: keychain test (Linux, Secret Service)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gnome-keyring dbus-x11
+          dbus-run-session -- sh -c 'echo -n ci | gnome-keyring-daemon --unlock --components=secrets >/dev/null && cargo test -- --ignored'
+      - name: keychain test (macOS / Windows)
+        if: runner.os != 'Linux'
+        run: cargo test -- --ignored
+
+      # Headless behaviour: no secret service must fail fast, not hang.
+      - name: headless status (Linux, no D-Bus)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo build
+          set +e
+          out=$(env -u DBUS_SESSION_BUS_ADDRESS -u LINEAR_API_TOKEN timeout 10 ./target/debug/lin auth status)
+          code=$?
+          echo "$out"
+          test "$code" -eq 3
+          echo "$out" | grep -q '"available":false'
