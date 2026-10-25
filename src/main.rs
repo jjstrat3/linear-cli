@@ -1,4 +1,5 @@
 mod api;
+mod commands;
 mod credential;
 mod error;
 mod http;
@@ -8,6 +9,7 @@ mod session;
 mod store;
 
 use std::io::{IsTerminal, Read};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
@@ -33,6 +35,90 @@ enum Command {
     /// Sign in, check, or sign out.
     #[command(subcommand)]
     Auth(AuthCommand),
+    /// Read, create, update and comment on issues.
+    #[command(subcommand)]
+    Issues(IssuesCommand),
+    /// Upload files to Linear.
+    #[command(subcommand)]
+    Files(FilesCommand),
+    /// Attach links to issues.
+    #[command(subcommand)]
+    Attachments(AttachmentsCommand),
+}
+
+#[derive(Subcommand)]
+enum IssuesCommand {
+    /// Read an issue by identifier (ENG-123) or UUID.
+    Read { id: String },
+    /// Update an issue. --description replaces the whole description.
+    Update {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        /// New description (markdown). Use `-` to read it from stdin.
+        #[arg(long, conflicts_with = "description_file")]
+        description: Option<String>,
+        /// Read the new description from a file.
+        #[arg(long)]
+        description_file: Option<PathBuf>,
+    },
+    /// Create an issue.
+    Create {
+        #[arg(long)]
+        title: String,
+        /// Team key, e.g. ENG. Optional with --parent-ticket (uses the parent's team).
+        #[arg(long)]
+        team: Option<String>,
+        /// Description (markdown). Use `-` to read it from stdin.
+        #[arg(long, conflicts_with = "description_file")]
+        description: Option<String>,
+        #[arg(long)]
+        description_file: Option<PathBuf>,
+        /// Make the new issue a sub-issue of this one.
+        #[arg(long)]
+        parent_ticket: Option<String>,
+        /// Issues the new issue blocks (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        blocks: Vec<String>,
+    },
+    /// Start a new comment thread on an issue.
+    Discuss {
+        id: String,
+        /// Comment body (markdown). Use `-` to read it from stdin.
+        #[arg(
+            long,
+            conflicts_with = "body_file",
+            required_unless_present = "body_file"
+        )]
+        body: Option<String>,
+        #[arg(long)]
+        body_file: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum FilesCommand {
+    /// Upload a file; prints its asset URL and a markdown snippet.
+    Upload {
+        path: PathBuf,
+        /// Override the MIME type guessed from the extension.
+        #[arg(long)]
+        content_type: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AttachmentsCommand {
+    /// Attach a URL to an issue.
+    Create {
+        id: String,
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        subtitle: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -97,6 +183,98 @@ fn run(command: Command) -> Result<(Value, i32)> {
         }) => login(with_token, scope, !no_browser).map(|v| (v, 0)),
         Command::Auth(AuthCommand::Status) => Ok(status()),
         Command::Auth(AuthCommand::Logout) => logout().map(|v| (v, 0)),
+        Command::Issues(cmd) => issues(cmd).map(|v| (v, 0)),
+        Command::Files(FilesCommand::Upload { path, content_type }) => {
+            commands::file_upload(&client()?, &path, content_type).map(|v| (v, 0))
+        }
+        Command::Attachments(AttachmentsCommand::Create {
+            id,
+            url,
+            title,
+            subtitle,
+        }) => commands::attachment_create(
+            &client()?,
+            &id,
+            commands::NewAttachment {
+                url,
+                title,
+                subtitle,
+            },
+        )
+        .map(|v| (v, 0)),
+    }
+}
+
+fn client() -> Result<api::Client> {
+    let (cred, _) = session::current()?;
+    Ok(api::Client::new(&cred))
+}
+
+/// Text from `--x <TEXT>` (where `-` means stdin) or `--x-file <PATH>`.
+fn text_arg(inline: Option<String>, file: Option<PathBuf>) -> Result<Option<String>> {
+    match (inline, file) {
+        (Some(t), _) if t == "-" => {
+            let mut s = String::new();
+            std::io::stdin()
+                .read_to_string(&mut s)
+                .map_err(|e| Error::Usage(format!("reading stdin: {e}")))?;
+            Ok(Some(s))
+        }
+        (Some(t), _) => Ok(Some(t)),
+        (None, Some(path)) => std::fs::read_to_string(&path)
+            .map(Some)
+            .map_err(|e| Error::Usage(format!("can't read {}: {e}", path.display()))),
+        (None, None) => Ok(None),
+    }
+}
+
+fn issues(cmd: IssuesCommand) -> Result<Value> {
+    match cmd {
+        IssuesCommand::Read { id } => commands::issue_read(&client()?, &id),
+        IssuesCommand::Update {
+            id,
+            title,
+            description,
+            description_file,
+        } => {
+            let description = text_arg(description, description_file)?;
+            commands::issue_update(
+                &client()?,
+                &id,
+                commands::IssueChanges { title, description },
+            )
+        }
+        IssuesCommand::Create {
+            title,
+            team,
+            description,
+            description_file,
+            parent_ticket,
+            blocks,
+        } => {
+            let description = text_arg(description, description_file)?;
+            commands::issue_create(
+                &client()?,
+                commands::NewIssue {
+                    title,
+                    description,
+                    team,
+                    parent: parent_ticket,
+                    blocks,
+                },
+            )
+        }
+        IssuesCommand::Discuss {
+            id,
+            body,
+            body_file,
+        } => {
+            let body = text_arg(body, body_file)?.unwrap_or_default();
+            if body.trim().is_empty() {
+                return Err(Error::Usage("comment body is empty".into()));
+            }
+            commands::issue_discuss(&client()?, &id, &body)
+        }
     }
 }
 
