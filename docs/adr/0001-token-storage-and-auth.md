@@ -48,5 +48,5 @@ From Linear's [OAuth 2.0 docs](https://linear.app/developers/oauth-2-0-authentic
 ## Resolved
 
 - Repo: `jjstrat3/linear-cli`.
-- OAuth app "LinCLI" (Linear disallows "Linear" in app names). Client ID `46bcf230063ae8578c372635cbb0eb22`, callback `http://127.0.0.1:47823/callback`.
+- OAuth app "LinCLI" (Linear disallows "Linear" in app names). Client ID `46bcf230063ae8578c372635cbb0eb22`, callbacks `http://127.0.0.1:{47823,47824,47825}/callback`. `lin` tries the ports in order, because a fixed port can already be taken (seen on Windows: os error 10048).
 - Binary name: `lin`.

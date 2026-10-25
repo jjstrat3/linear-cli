@@ -18,8 +18,9 @@ use crate::http;
 
 /// The "LinCLI" OAuth application. Client IDs are public by design.
 pub const CLIENT_ID: &str = "46bcf230063ae8578c372635cbb0eb22";
-pub const REDIRECT_PORT: u16 = 47823;
-pub const REDIRECT_URI: &str = "http://127.0.0.1:47823/callback";
+/// Loopback callback ports, tried in order. Each must be registered as
+/// `http://127.0.0.1:<port>/callback` on the OAuth app.
+pub const REDIRECT_PORTS: &[u16] = &[47823, 47824, 47825];
 pub const DEFAULT_SCOPES: &[&str] = &["read", "issues:create", "comments:create"];
 
 const AUTHORIZE_URL: &str = "https://linear.app/oauth/authorize";
@@ -45,11 +46,30 @@ pub fn code_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
-pub fn authorize_url(scopes: &[String], state: &str, challenge: &str) -> Url {
+pub fn redirect_uri(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/callback")
+}
+
+/// Bind the first free callback port.
+fn bind_callback() -> Result<(TcpListener, u16)> {
+    let mut errors = Vec::new();
+    for &port in REDIRECT_PORTS {
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => return Ok((l, port)),
+            Err(e) => errors.push(format!("{port}: {e}")),
+        }
+    }
+    Err(Error::OAuth(format!(
+        "no free port for the login callback ({}); close whatever is using them, or use `lin auth login --with-token`",
+        errors.join("; ")
+    )))
+}
+
+pub fn authorize_url(scopes: &[String], state: &str, challenge: &str, redirect_uri: &str) -> Url {
     let mut url = Url::parse(AUTHORIZE_URL).expect("valid authorize URL");
     url.query_pairs_mut()
         .append_pair("client_id", CLIENT_ID)
-        .append_pair("redirect_uri", REDIRECT_URI)
+        .append_pair("redirect_uri", redirect_uri)
         .append_pair("response_type", "code")
         .append_pair("scope", &scopes.join(","))
         .append_pair("state", state)
@@ -62,14 +82,11 @@ pub fn authorize_url(scopes: &[String], state: &str, challenge: &str) -> Url {
 /// Run the browser login and return a fresh credential.
 pub fn login(scopes: &[String], open_browser: bool) -> Result<Credential> {
     // Bind before showing the URL so a busy port fails immediately.
-    let listener = TcpListener::bind(("127.0.0.1", REDIRECT_PORT)).map_err(|e| {
-        Error::OAuth(format!(
-            "can't listen on 127.0.0.1:{REDIRECT_PORT} for the login callback: {e}"
-        ))
-    })?;
+    let (listener, port) = bind_callback()?;
+    let redirect = redirect_uri(port);
     let verifier = random_urlsafe(32)?;
     let state = random_urlsafe(16)?;
-    let url = authorize_url(scopes, &state, &code_challenge(&verifier));
+    let url = authorize_url(scopes, &state, &code_challenge(&verifier), &redirect);
 
     eprintln!("Open this URL to sign in to Linear:\n\n  {url}\n");
     if open_browser {
@@ -77,7 +94,7 @@ pub fn login(scopes: &[String], open_browser: bool) -> Result<Credential> {
     }
 
     let code = wait_for_code(&listener, &state)?;
-    exchange_code(&code, &verifier)
+    exchange_code(&code, &verifier, &redirect)
 }
 
 fn wait_for_code(listener: &TcpListener, state: &str) -> Result<String> {
@@ -196,11 +213,11 @@ fn token_request(form: &[(&str, &str)]) -> Result<Credential> {
     })
 }
 
-pub fn exchange_code(code: &str, verifier: &str) -> Result<Credential> {
+pub fn exchange_code(code: &str, verifier: &str, redirect_uri: &str) -> Result<Credential> {
     token_request(&[
         ("grant_type", "authorization_code"),
         ("code", code),
-        ("redirect_uri", REDIRECT_URI),
+        ("redirect_uri", redirect_uri),
         ("client_id", CLIENT_ID),
         ("code_verifier", verifier),
     ])
@@ -299,12 +316,26 @@ mod tests {
 
     #[test]
     fn authorize_url_has_pkce_params() {
-        let url = authorize_url(&["read".into(), "write".into()], "st", "ch");
+        let url = authorize_url(
+            &["read".into(), "write".into()],
+            "st",
+            "ch",
+            &redirect_uri(47824),
+        );
         let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(q["client_id"], CLIENT_ID);
         assert_eq!(q["scope"], "read,write");
         assert_eq!(q["code_challenge_method"], "S256");
-        assert_eq!(q["redirect_uri"], REDIRECT_URI);
+        assert_eq!(q["redirect_uri"], "http://127.0.0.1:47824/callback");
+    }
+
+    #[test]
+    fn falls_back_when_first_port_is_busy() {
+        let Ok(_hold) = TcpListener::bind(("127.0.0.1", REDIRECT_PORTS[0])) else {
+            return; // port already taken on this machine; nothing to prove
+        };
+        let (_l, port) = bind_callback().unwrap();
+        assert_ne!(port, REDIRECT_PORTS[0]);
     }
 
     #[test]
