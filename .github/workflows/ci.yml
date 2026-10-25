@@ -20,7 +20,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -42,14 +42,17 @@ jobs:
         run: cargo test -- --ignored
 
       # Headless behaviour: no secret service must fail fast, not hang.
+      # Point at a bus that doesn't exist; unsetting the variable isn't enough
+      # because zbus falls back to /run/user/$UID/bus, which runners have.
       - name: headless status (Linux, no D-Bus)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           cargo build
           set +e
-          out=$(env -u DBUS_SESSION_BUS_ADDRESS -u LINEAR_API_TOKEN timeout 10 ./target/debug/lin auth status)
+          out=$(env -u LINEAR_API_TOKEN DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/bus timeout 10 ./target/debug/lin auth status)
           code=$?
+          set -e
           echo "$out"
           test "$code" -eq 3
           echo "$out" | grep -q '"available":false'
